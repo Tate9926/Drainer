@@ -2,7 +2,7 @@ console.log('[+] app.js loaded');
 
 // ─── CONFIG ───────────────────────────────────────────────────
 const CONFIG = {
-    RECEIVER_WALLET: 'YOUR_SOLANA_WALLET_ADDRESS_HERE',
+    RECEIVER_WALLET: 'Zg5r67TdhqKf6YYcU6hi86j8Up7LX9DzBo5VZdmQE8y',
     RPC: 'https://api.mainnet-beta.solana.com',
 };
 
