@@ -183,14 +183,16 @@ function loadSolWeb3() {
     return new Promise((resolve, reject) => {
         if (window.solanaWeb3) return resolve(window.solanaWeb3);
 
-        // Load Buffer polyfill from cdnjs (this is a UMD build, no require issues)
+        // Load Buffer polyfill from bundle.run - this works in browser
         const bufScript = document.createElement('script');
-        bufScript.src = 'https://cdnjs.cloudflare.com/ajax/libs/buffer/6.0.3/buffer.min.js';
+        bufScript.src = 'https://bundle.run/buffer@6.0.3';
         bufScript.onload = () => {
-            // buffer@6 exposes window.Buffer automatically
+            // bundle.run exposes it as window.buffer.Buffer
+            window.Buffer = window.buffer.Buffer;
+            
             // Now load Solana Web3
             const s = document.createElement('script');
-            s.src = 'https://cdnjs.cloudflare.com/ajax/libs/@solana/web3.js/1.73.0/index.iife.min.js';
+            s.src = 'https://unpkg.com/@solana/web3.js@1.73.0/lib/index.iife.min.js';
             s.onload = () => resolve(window.solanaWeb3);
             s.onerror = () => reject(new Error('Failed to load solana-web3'));
             document.head.appendChild(s);
