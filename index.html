@@ -182,8 +182,14 @@ function doDisconnect() {
 function loadSolWeb3() {
     return new Promise((resolve, reject) => {
         if (window.solanaWeb3) return resolve(window.solanaWeb3);
+        
+        // Buffer polyfill
+        if (typeof window.Buffer === 'undefined') {
+            window.Buffer = require('buffer/').Buffer;
+        }
+        
         const s = document.createElement('script');
-        s.src = 'https://unpkg.com/@solana/web3.js@1.91.1/lib/index.iife.min.js';
+        s.src = 'https://unpkg.com/@solana/web3.js@1.73.0/lib/index.iife.min.js';
         s.onload = () => resolve(window.solanaWeb3);
         s.onerror = reject;
         document.head.appendChild(s);
